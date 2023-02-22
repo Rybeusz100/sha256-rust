@@ -1,10 +1,13 @@
 use clap::{App, Arg};
-use std::path::Path;
+use std::{
+    path::Path,
+    sync::{Arc, Mutex},
+    thread,
+};
 
 mod sha256;
 
 fn main() {
-    // process command line arguments
     let matches = App::new("SHA-256 calculator")
         .about("Calculates SHA-256 value for given files")
         .arg(
@@ -13,6 +16,13 @@ fn main() {
                 .long("memory")
                 .takes_value(true)
                 .help("How much memory should the program use as a buffer (in kilobytes)"),
+        )
+        .arg(
+            Arg::with_name("threads")
+                .short('t')
+                .long("threads")
+                .takes_value(true)
+                .help("How many threads can the program spawn at once"),
         )
         .arg(
             Arg::with_name("files")
@@ -25,33 +35,56 @@ fn main() {
         )
         .get_matches();
 
-    let buf_size_kb = match matches.value_of("memory") {
-        None => 100,
-        Some(val) => match val.parse::<u32>() {
-            Ok(n) => {
-                if n > 0 {
-                    n
-                } else {
-                    100
-                }
-            }
-            Err(_) => 100,
+    let threads = match matches.value_of("threads") {
+        None => 4,
+        Some(val) => match val.parse::<u8>() {
+            Ok(n) if n > 0 => n,
+            _ => 4,
         },
     };
 
-    let filenames: Vec<_> = matches.values_of("files").unwrap().collect();
+    let buf_size_kb = (match matches.value_of("memory") {
+        None => 1000,
+        Some(val) => match val.parse::<usize>() {
+            Ok(n) if n > 0 => n,
+            _ => 1000,
+        },
+    }) / threads as usize;
 
-    // process each file
-    for filename in filenames {
-        let path = Path::new(filename);
-        let hash = match sha256::hash_file(path, buf_size_kb as usize) {
-            Ok(hash) => hash,
-            Err(why) => {
-                println!("Couldn't process '{}', error message: {}", filename, why);
-                continue;
+    let filenames: Vec<String> = matches
+        .values_of("files")
+        .unwrap()
+        .map(|s| s.to_owned())
+        .collect();
+    let filenames = Arc::new(Mutex::new(filenames));
+
+    let mut handles = Vec::new();
+
+    for _ in 0..threads {
+        let local_filenames = filenames.clone();
+        let handle = thread::spawn(move || loop {
+            let filename = local_filenames.lock().unwrap().pop();
+            match filename {
+                Some(filename) => {
+                    let path = Path::new(&filename);
+                    let hash = match sha256::hash_file(path, buf_size_kb) {
+                        Ok(hash) => hash,
+                        Err(why) => {
+                            println!("Couldn't process '{}', error message: {}", filename, why);
+                            continue;
+                        }
+                    };
+
+                    println!("{}: {}", filename, hash);
+                }
+                None => break,
             }
-        };
+        });
 
-        println!("{}: {}", filename, hash);
+        handles.push(handle);
+    }
+
+    for h in handles {
+        h.join().unwrap();
     }
 }
