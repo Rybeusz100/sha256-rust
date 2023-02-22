@@ -18,9 +18,9 @@ fn process_chunk(chunk: &mut [u8], hash: &mut [u32]) {
     let mut w: [u32; 64] = [0; 64];
 
     // copy into first 16 32-bit words
-    for i in 0..16 {
+    for (i, word) in w.iter_mut().enumerate().take(16) {
         let index = i * 4;
-        w[i] = u32::from_be_bytes(chunk[index..index + 4].try_into().unwrap());
+        *word = u32::from_be_bytes(chunk[index..index + 4].try_into().unwrap());
     }
 
     // extend the first 16 words into remaining 48 words
@@ -98,7 +98,7 @@ pub fn hash_file(path: &Path, buf_size_kb: usize) -> Result<String, std::io::Err
     // process buf_reads - 1 parts of file
     for _buf_read in 0..buf_reads - 1 {
         // read into buffer
-        file.read(&mut main_buffer)?;
+        file.read_exact(&mut main_buffer)?;
 
         // process 512-bit chunks
         let mut chunk_start = 0;
@@ -112,7 +112,7 @@ pub fn hash_file(path: &Path, buf_size_kb: usize) -> Result<String, std::io::Err
     // process data without last 512-bit chunk
     let last_chunk_start =
         file_size_bytes - ((buf_reads - 1) * buf_size_bytes as u64) - (file_size_bytes % 64);
-    file.read(&mut main_buffer[0..last_chunk_start as usize])?;
+    file.read_exact(&mut main_buffer[0..last_chunk_start as usize])?;
     // process 512-bit chunks
     let mut chunk_start = 0;
     let chunks_in_buf = last_chunk_start / 64;
@@ -139,8 +139,8 @@ pub fn hash_file(path: &Path, buf_size_kb: usize) -> Result<String, std::io::Err
         index += 1;
     }
 
-    for i in 0..8 {
-        main_buffer[index] = file_size_byte_array[i];
+    for byte in file_size_byte_array {
+        main_buffer[index] = byte;
         index += 1;
     }
 
