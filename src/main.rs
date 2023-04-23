@@ -1,6 +1,7 @@
 use clap::{App, Arg};
 use std::{
-    path::Path,
+    fs,
+    path::PathBuf,
     sync::{Arc, Mutex},
     thread,
 };
@@ -31,7 +32,7 @@ fn main() {
                 .takes_value(true)
                 .required(true)
                 .min_values(1)
-                .help("Filenames separated by spaces"),
+                .help("Files or directories separated by spaces"),
         )
         .get_matches();
 
@@ -51,31 +52,52 @@ fn main() {
         },
     }) / threads as usize;
 
-    let filenames: Vec<String> = matches
+    let filepaths: Vec<PathBuf> = matches
         .values_of("files")
         .unwrap()
-        .map(|s| s.to_owned())
+        .map(PathBuf::from)
         .collect();
-    let filenames = Arc::new(Mutex::new(filenames));
+    let filepaths = Arc::new(Mutex::new(filepaths));
 
     let mut handles = Vec::new();
 
     for _ in 0..threads {
-        let local_filenames = filenames.clone();
+        let local_filenames = filepaths.clone();
         let handle = thread::spawn(move || loop {
-            let filename = local_filenames.lock().unwrap().pop();
-            match filename {
-                Some(filename) => {
-                    let path = Path::new(&filename);
+            let path = local_filenames.lock().unwrap().pop();
+            match &path {
+                Some(path) => {
+                    if path.is_dir() {
+                        match fs::read_dir(path) {
+                            Ok(children) => {
+                                for child in children {
+                                    local_filenames.lock().unwrap().push(child.unwrap().path());
+                                }
+                            }
+                            Err(why) => {
+                                println!(
+                                    "Couldn't read directory '{}', error message: {}",
+                                    path.display(),
+                                    why
+                                );
+                            }
+                        }
+                        continue;
+                    }
+
                     let hash = match sha256::hash_file(path, buf_size_kb) {
                         Ok(hash) => hash,
                         Err(why) => {
-                            println!("Couldn't process '{}', error message: {}", filename, why);
+                            println!(
+                                "Couldn't process '{}', error message: {}",
+                                path.display(),
+                                why
+                            );
                             continue;
                         }
                     };
 
-                    println!("{}: {}", filename, hash);
+                    println!("{} {}", path.display(), hash);
                 }
                 None => break,
             }
